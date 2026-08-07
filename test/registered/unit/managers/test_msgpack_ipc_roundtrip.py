@@ -10,8 +10,11 @@ type-specific decisions (the `ExpertWeightPointer` narrowing, the
 
 import dataclasses
 import unittest
+from typing import Annotated
 
 import msgspec
+from fastapi import Body
+from pydantic import TypeAdapter
 
 from sglang.srt.managers import io_struct
 from sglang.srt.managers.io_struct import (
@@ -126,7 +129,7 @@ REGISTRY_TYPE_INSTANCES = {
     "LoadLoRAAdapterFromTensorsReqInput": LoadLoRAAdapterFromTensorsReqInput(
         lora_name="adapter",
         config_dict={"r": 8, "lora_alpha": 16, "target_modules": ["q_proj", "v_proj"]},
-        serialized_tensors="",
+        serialized_named_tensors=[b"tp0-bytes", b"tp1-bytes"],
         added_tokens_config={"<extra>": 32000},
     ),
     "DumperControlReqInput": DumperControlReqInput(method="start", body={"k": "v"}),
@@ -159,6 +162,21 @@ class TestMsgpackIpcRoundtrip(CustomTestCase):
                 )
                 self.assertEqual(_round_trip(instance), instance)
                 self.assertEqual(_double_hop(instance), instance)
+
+    def test_lora_tensor_http_payload_uses_per_rank_serialization(self):
+        payload = {
+            "lora_name": "adapter",
+            "config_dict": {"r": 8},
+            "serialized_named_tensors": ["Ynl0ZXM="],
+            "load_format": "flattened_bucket",
+        }
+
+        request = TypeAdapter(
+            Annotated[LoadLoRAAdapterFromTensorsReqInput, Body()]
+        ).validate_python(payload)
+
+        self.assertEqual(request.serialized_named_tensors, [b"bytes"])
+        self.assertEqual(request.load_format, "flattened_bucket")
 
     def test_backup_dram_req_is_narrowed(self):
         # ExpertWeightPointer carries only the two fields the consumer reads; the
