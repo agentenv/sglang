@@ -3189,6 +3189,10 @@ class TokenizerManager(TokenizerControlMixin, TokenizerManagerScoreMixin):
         }
         self._remove_req_state(recv_obj.rid)
 
+        # Mark ongoing LoRA request as finished.
+        if self.enable_lora and state.obj.lora_path:
+            asyncio.create_task(self.lora_registry.release(state.obj.lora_id))
+
         state.out_list.append(out)
         state.event.set()
 
