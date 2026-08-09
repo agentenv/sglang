@@ -65,6 +65,36 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _reconstruct_flattened_tensor_buckets(data) -> dict[str, torch.Tensor]:
+    """Reconstruct one adapter from multiple bounded flat buffers."""
+    if not isinstance(data, list) or not data:
+        raise ValueError("flattened_buckets payload must be a non-empty list")
+
+    tensors: dict[str, torch.Tensor] = {}
+    for index, bucket_data in enumerate(data):
+        if not isinstance(bucket_data, dict):
+            raise ValueError(f"flattened_buckets[{index}] must be a mapping")
+        try:
+            flattened_tensor = bucket_data["flattened_tensor"]
+            metadata = bucket_data["metadata"]
+        except KeyError as exc:
+            raise ValueError(
+                f"flattened_buckets[{index}] is missing {exc.args[0]!r}"
+            ) from exc
+
+        bucket = FlattenedTensorBucket(
+            flattened_tensor=flattened_tensor,
+            metadata=metadata,
+        )
+        for name, tensor in bucket.reconstruct_tensors():
+            if name in tensors:
+                raise ValueError(
+                    f"flattened_buckets contains duplicate tensor name {name!r}"
+                )
+            tensors[name] = tensor
+    return tensors
+
+
 class BaseTpWorker(ABC):
     @abstractmethod
     def forward_batch_generation(self, forward_batch: ForwardBatch):
@@ -222,6 +252,8 @@ class BaseTpWorker(ABC):
                 metadata=data["metadata"],
             )
             tensors = dict(bucket.reconstruct_tensors())
+        elif recv_req.load_format == "flattened_buckets":
+            tensors = _reconstruct_flattened_tensor_buckets(data)
         else:
             tensors = data
         if recv_req.expected_checksums is not None:

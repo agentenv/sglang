@@ -13,6 +13,7 @@ import unittest
 from typing import Annotated
 
 import msgspec
+import torch
 from fastapi import Body
 from pydantic import TypeAdapter
 
@@ -36,6 +37,7 @@ from sglang.srt.managers.io_struct import (
     msgpack_decode,
     msgpack_encode,
 )
+from sglang.srt.managers.tp_worker import _reconstruct_flattened_tensor_buckets
 from sglang.srt.model_executor.cuda_graph_config import CudaGraphConfig
 from sglang.srt.utils.msgspec_utils import msgspec_to_builtins
 from sglang.srt.utils.weight_checker import ChecksumInfo as PydanticChecksumInfo
@@ -168,7 +170,7 @@ class TestMsgpackIpcRoundtrip(CustomTestCase):
             "lora_name": "adapter",
             "config_dict": {"r": 8},
             "serialized_named_tensors": ["Ynl0ZXM="],
-            "load_format": "flattened_bucket",
+            "load_format": "flattened_buckets",
         }
 
         request = TypeAdapter(
@@ -176,7 +178,58 @@ class TestMsgpackIpcRoundtrip(CustomTestCase):
         ).validate_python(payload)
 
         self.assertEqual(request.serialized_named_tensors, [b"bytes"])
-        self.assertEqual(request.load_format, "flattened_bucket")
+        self.assertEqual(request.load_format, "flattened_buckets")
+
+    def test_lora_multi_bucket_payload_reconstructs_exactly(self):
+        from sglang.srt.weight_sync.tensor_bucket import FlattenedTensorBucket
+
+        originals = [
+            (
+                "layer.0.lora_A.weight",
+                torch.arange(8, dtype=torch.bfloat16).reshape(2, 4),
+            ),
+            (
+                "layer.0.lora_B.weight",
+                torch.arange(8, dtype=torch.bfloat16).reshape(4, 2),
+            ),
+            (
+                "layer.1.lora_A.weight",
+                torch.arange(6, dtype=torch.float32).reshape(2, 3),
+            ),
+        ]
+        payload = []
+        for named_tensors in (originals[:2], originals[2:]):
+            bucket = FlattenedTensorBucket(named_tensors=named_tensors)
+            payload.append(
+                {
+                    "flattened_tensor": bucket.get_flattened_tensor(),
+                    "metadata": bucket.get_metadata(),
+                }
+            )
+
+        reconstructed = _reconstruct_flattened_tensor_buckets(payload)
+
+        self.assertEqual(list(reconstructed), [name for name, _ in originals])
+        for name, tensor in originals:
+            self.assertTrue(torch.equal(reconstructed[name], tensor))
+
+    def test_lora_multi_bucket_payload_rejects_duplicate_names(self):
+        from sglang.srt.weight_sync.tensor_bucket import FlattenedTensorBucket
+
+        payload = []
+        for value in (1, 2):
+            bucket = FlattenedTensorBucket(
+                named_tensors=[("duplicate.lora_A.weight", torch.tensor([value]))]
+            )
+            payload.append(
+                {
+                    "flattened_tensor": bucket.get_flattened_tensor(),
+                    "metadata": bucket.get_metadata(),
+                }
+            )
+
+        with self.assertRaisesRegex(ValueError, "duplicate tensor name"):
+            _reconstruct_flattened_tensor_buckets(payload)
 
     def test_backup_dram_req_is_narrowed(self):
         # ExpertWeightPointer carries only the two fields the consumer reads; the
