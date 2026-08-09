@@ -329,39 +329,53 @@ class TestLoRALoadFromTensor(CustomTestCase):
 
         print("\n[Test]LoRA logprob comparison test passed!")
 
-    def test_lora_e2e_load_from_flattened_bucket(self):
-        """Test loading LoRA via FlattenedTensorBucket format (RL weight sync path)."""
+    def test_lora_e2e_load_unload_reload_from_flattened_buckets(self):
+        """Exercise the multi-bucket RL transport through the real LoRA manager."""
         from sglang.srt.utils import MultiprocessingSerializer
         from sglang.srt.weight_sync.tensor_bucket import FlattenedTensorBucket
 
         named_tensors = list(self.lora_tensors.items())
-        bucket = FlattenedTensorBucket(named_tensors=[(n, t) for n, t in named_tensors])
-        bucket_dict = {
-            "flattened_tensor": bucket.get_flattened_tensor(),
-            "metadata": bucket.get_metadata(),
-        }
-        serialized = MultiprocessingSerializer.serialize(bucket_dict, output_str=True)
+        midpoint = len(named_tensors) // 2
+        payload = []
+        for tensor_group in (named_tensors[:midpoint], named_tensors[midpoint:]):
+            bucket = FlattenedTensorBucket(named_tensors=tensor_group)
+            payload.append(
+                {
+                    "flattened_tensor": bucket.get_flattened_tensor(),
+                    "metadata": bucket.get_metadata(),
+                }
+            )
+        adapter_name = "self_cognition_Alice_flattened_buckets"
 
-        # flattened_bucket callers pass one serialized copy per TP rank, same
-        # as Engine.update_weights_from_tensor.
-        result = self.engine.load_lora_adapter_from_tensors(
-            lora_name="self_cognition_Alice_flattened",
-            tensors=[serialized],
-            config_dict=self.lora_config_dict,
-            load_format="flattened_bucket",
-        )
-        self.assertTrue(result.success, f"Failed: {result.error_message}")
+        def load_and_check():
+            serialized = MultiprocessingSerializer.serialize(payload, output_str=True)
+            result = self.engine.load_lora_adapter_from_tensors(
+                lora_name=adapter_name,
+                tensors=[serialized],
+                config_dict=self.lora_config_dict,
+                load_format="flattened_buckets",
+            )
+            self.assertTrue(result.success, f"Failed: {result.error_message}")
+            output = self.engine.generate(
+                prompt=[TEST_PROMPT],
+                sampling_params={
+                    "max_new_tokens": MAX_NEW_TOKENS,
+                    "temperature": 0.0,
+                },
+                lora_path=[adapter_name],
+            )
+            self.assertEqual(
+                output[0]["text"][: len(EXPECTED_OUTPUT)],
+                EXPECTED_OUTPUT,
+                "Output after applying LoRA via flattened buckets does not match expected",
+            )
 
-        output = self.engine.generate(
-            prompt=[TEST_PROMPT],
-            sampling_params={"max_new_tokens": MAX_NEW_TOKENS, "temperature": 0.0},
-            lora_path=["self_cognition_Alice_flattened"],
+        load_and_check()
+        result = self.engine.unload_lora_adapter(adapter_name)
+        self.assertTrue(
+            result.success, f"Failed to unload LoRA: {result.error_message}"
         )
-        self.assertEqual(
-            output[0]["text"][: len(EXPECTED_OUTPUT)],
-            EXPECTED_OUTPUT,
-            "Output after applying LoRA via flattened bucket does not match expected",
-        )
+        load_and_check()
 
     @classmethod
     def tearDownClass(cls):
