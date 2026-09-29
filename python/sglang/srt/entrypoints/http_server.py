@@ -596,6 +596,9 @@ async def validation_exception_handler(request: Request, exc: HTTPException):
     return ORJSONResponse(content=error.model_dump(), status_code=exc.status_code)
 
 
+_TENSOR_PAYLOAD_PATHS = frozenset({"/update_weights_from_tensor"})
+
+
 # Custom exception handlers to change validation error status codes
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
@@ -613,13 +616,17 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
             message=_anthropic_validation_message(exc.errors()),
         )
 
-    exc_str = str(exc)
-    errors_str = str(exc.errors())
-
-    if errors_str and errors_str != exc_str:
-        message = f"{exc_str} {errors_str}"
+    if request.url.path in _TENSOR_PAYLOAD_PATHS:
+        # Tensor payloads can be hundreds of MB of base64 CUDA-IPC handles;
+        # never reflect the request input into the error response.
+        message = _anthropic_validation_message(exc.errors())
     else:
-        message = exc_str
+        exc_str = str(exc)
+        errors_str = str(exc.errors())
+        if errors_str and errors_str != exc_str:
+            message = f"{exc_str} {errors_str}"
+        else:
+            message = exc_str
 
     if request.url.path.startswith("/v1/responses"):
         # adapt specially, for v1/responses API only (notice the error key is different)
