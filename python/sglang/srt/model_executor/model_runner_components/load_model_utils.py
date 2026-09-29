@@ -310,12 +310,19 @@ def load_model_with_memory_saver(
             "IPC-mapped weights cannot be offloaded to CPU."
         )
         enable_cpu_backup = False
+    enable_disk_backup = (
+        get_exec().features.enable_weights_disk_backup and not is_draft_worker
+    )
+    assert not (
+        enable_cpu_backup and enable_disk_backup
+    ), "weight CPU and disk backup are mutually exclusive"
 
     remote_instance_weight_info = None
     startup_weight_load = None
     with memory_saver_adapter.region(
         GPU_MEMORY_TYPE_WEIGHTS,
         enable_cpu_backup=enable_cpu_backup,
+        enable_disk_backup=enable_disk_backup,
     ):
         loader = get_model_loader(
             load_config=load_config,

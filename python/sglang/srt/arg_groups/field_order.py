@@ -491,6 +491,7 @@ POSITIONAL_FIELD_ORDER = (
     "debug_tensor_dump_input_file",
     "enable_memory_saver",
     "enable_weights_cpu_backup",
+    "enable_weights_disk_backup",
     "enable_draft_weights_cpu_backup",
     "enable_custom_logit_processor",
     "enable_return_hidden_states",
