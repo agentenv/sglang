@@ -1755,6 +1755,10 @@ class Qwen4ExpForConditionalGeneration(Qwen3VLForConditionalGeneration):
     packed_modules_mapping = Qwen3_5ForCausalLM.packed_modules_mapping
     hf_to_sglang_mapper = None
 
+    # Without this the LoRA pool falls back to get_default_hidden_dim, which has no
+    # branch for the GDN projections; the QSA indexer, HC and PLE have no LoRA wrapper.
+    supported_lora_modules = Qwen3_5ForCausalLM.supported_lora_modules
+
     @staticmethod
     def shared_experts_fusion_disable_reason(hf_config, quant_config):
         return Qwen4ExpVLModel.shared_experts_fusion_disable_reason(
@@ -1778,6 +1782,12 @@ class Qwen4ExpForConditionalGeneration(Qwen3VLForConditionalGeneration):
         self.deepstack_visual_indexes = (
             self.visual.deepstack_visual_indexes if self.visual is not None else []
         )
+
+    def get_hidden_dim(self, module_name: str, layer_idx: int):
+        return self.model.get_hidden_dim(module_name, layer_idx)
+
+    def should_apply_lora(self, module_name: str) -> bool:
+        return module_name.startswith("model.layers.")
 
     @torch.no_grad()
     def forward(self, *args, **kwargs):
