@@ -454,7 +454,11 @@ class ModelRunner:
         # CPU offload
         set_offloader(create_offloader(dp_rank=self.ps.dp_rank))
 
-        self._weight_checker = WeightChecker(get_model=lambda: self.model, ps=self.ps)
+        self._weight_checker = WeightChecker(
+            get_model=lambda: self.model,
+            ps=self.ps,
+            get_lora_manager=lambda: self.lora_manager,
+        )
 
         if envs.SGLANG_DETECT_SLOW_RANK.get():
             slow_rank_detector.execute()

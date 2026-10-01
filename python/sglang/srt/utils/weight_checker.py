@@ -86,8 +86,15 @@ def overall_checksum(checksums: Dict[str, str]) -> str:
 
 
 class WeightChecker:
-    def __init__(self, *, get_model: Callable[[], Any], ps: Any):
+    def __init__(
+        self,
+        *,
+        get_model: Callable[[], Any],
+        ps: Any,
+        get_lora_manager: Optional[Callable[[], Any]] = None,
+    ):
         self._get_model = get_model
+        self._get_lora_manager = get_lora_manager
         self._ps = ps
         self._snapshot_tensors = None
         self._snapshot_arena = None
@@ -191,6 +198,10 @@ class WeightChecker:
             if should_compare:
                 checksums[name] = _hash_tensor(comparable.dequantize().data)
 
+        # LoRA A/B live in the memory pool, outside named_parameters()/named_buffers().
+        if self._get_lora_manager is not None:
+            checksums.update(lora_pool_checksums(self._get_lora_manager()))
+
         overall = overall_checksum(checksums)
 
         torch.cuda.synchronize()
@@ -223,6 +234,28 @@ class WeightChecker:
         model = self._get_model()
         yield from model.named_parameters()
         yield from model.named_buffers()
+
+
+def lora_pool_checksums(lora_manager: Any) -> Dict[str, str]:
+    """Checksums of every resident adapter slot in the LoRA memory pool, keyed
+    ``lora:<adapter>:<module>:<layer>:A|B``. Read-only; empty when LoRA is off."""
+    pool = getattr(lora_manager, "memory_pool", None)
+    if pool is None:
+        return {}
+    refs = getattr(lora_manager, "lora_refs", {})
+    out: Dict[str, str] = {}
+    for uid, slot in sorted(pool.uid_to_buffer_id.items(), key=lambda kv: str(kv[0])):
+        if uid is None:  # the base-model slot is not an adapter
+            continue
+        ref = refs.get(uid)
+        name = getattr(ref, "lora_name", None) or str(uid)
+        for tag, buffers in (("A", pool.A_buffer), ("B", pool.B_buffer)):
+            for module, layers in buffers.items():
+                for layer, tensor in enumerate(layers):
+                    out[f"lora:{name}:{module}:{layer}:{tag}"] = _hash_tensor(
+                        tensor[slot]
+                    )
+    return out
 
 
 def _hash_tensor(t: torch.Tensor) -> str:
