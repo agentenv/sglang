@@ -1,7 +1,7 @@
 import json
 import logging
 import re
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Union
 
 from sglang.srt.entrypoints.openai.protocol import Tool
 from sglang.srt.function_call.base_format_detector import BaseFormatDetector
@@ -481,3 +481,43 @@ class Qwen3CoderDetector(BaseFormatDetector):
 
     def get_structural_tag_name(self) -> str:
         return "qwen_3_coder"
+
+    def get_auto_tool_call_structural_tag(
+        self,
+        tools: Union[List[Tool], None] = None,
+        thinking_mode: bool = False,
+        parallel_tool_calls: bool = True,
+    ):
+        """``tool_choice="auto"`` with ``parallel_tool_calls=False``: allow free
+        text, then at most ONE ``<tool_call>...</tool_call>`` block, after which
+        the grammar ends (only EOS is allowed).  The generated tokens therefore
+        never contain a second call, so what is executed equals what is trained.
+        The call body itself is not constrained (same as the unconstrained auto
+        path); ``parallel_tool_calls=True`` keeps the old unconstrained behaviour.
+        """
+        if parallel_tool_calls:
+            return None
+        from xgrammar import StructuralTag
+        from xgrammar.structural_tag import (
+            AnyTextFormat,
+            SequenceFormat,
+            TagFormat,
+            TriggeredTagsFormat,
+        )
+
+        suffix = TriggeredTagsFormat(
+            triggers=[self.tool_call_start_token],
+            tags=[
+                TagFormat(
+                    begin=self.tool_call_start_token,
+                    content=AnyTextFormat(),
+                    end=self.tool_call_end_token,
+                )
+            ],
+            stop_after_first=True,
+        )
+        if thinking_mode:
+            suffix = SequenceFormat(
+                elements=[TagFormat(begin="", content=AnyTextFormat(), end="</think>"), suffix]
+            )
+        return StructuralTag(format=suffix)
