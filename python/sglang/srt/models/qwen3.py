@@ -38,6 +38,7 @@ from sglang.srt.runtime_context import (
     get_stream,
 )
 from sglang.srt.true_on_policy import (
+    dense_activation_cast_dtype,
     should_disable_fused_qk_norm_mrope,
     should_force_bfloat16_dense_tensor_math,
 )
@@ -279,14 +280,14 @@ class Qwen3Attention(nn.Module):
         hidden_states: torch.Tensor,
         forward_batch: ForwardBatch,
     ) -> torch.Tensor:
-        if (
-            should_force_bfloat16_dense_tensor_math()
-            or hidden_states.dtype != self.qkv_proj.weight.dtype
-        ):
-            # True-on-policy RMSNorm can produce fp32 activations while dense
-            # projections remain bf16, including during cuda-graph capture when
-            # the global on-policy flag is temporarily cleared.
-            hidden_states = hidden_states.to(self.qkv_proj.weight.dtype)
+        # True-on-policy RMSNorm can produce fp32 activations while dense
+        # projections remain bf16, including during cuda-graph capture when
+        # the global on-policy flag is temporarily cleared.
+        cast_dtype = dense_activation_cast_dtype(
+            hidden_states.dtype, self.qkv_proj.weight.dtype
+        )
+        if cast_dtype is not None:
+            hidden_states = hidden_states.to(cast_dtype)
 
         save_kv_cache = True
         use_aiter_fused = (

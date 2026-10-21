@@ -54,6 +54,25 @@ def should_force_bfloat16_dense_tensor_math() -> bool:
     ).force_bfloat16_dense_tensor_math
 
 
+def dense_activation_cast_dtype(
+    activation_dtype: torch.dtype, weight_dtype: torch.dtype
+) -> Optional[torch.dtype]:
+    """Dtype a dense projection's input must be cast to, or None for no cast.
+
+    True-on-policy RMSNorm can emit fp32 activations in front of bf16 dense
+    projections, so the input is cast to the weight dtype.  A one-byte weight
+    (FP8 from online quantization or an FP8 checkpoint) is a quantized
+    projection: its linear method quantizes the high-precision activation
+    itself, and an activation cast to FP8 without a scale breaks it.  Such
+    inputs are left as they are.
+    """
+    if weight_dtype.itemsize < 2:
+        return None
+    if should_force_bfloat16_dense_tensor_math() or activation_dtype != weight_dtype:
+        return weight_dtype
+    return None
+
+
 def should_force_bfloat16_lm_head(
     *,
     use_fp32_lm_head: bool = False,

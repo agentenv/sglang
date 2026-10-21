@@ -2,6 +2,7 @@
 
 from .config import (
     ROW_LINEAR_INV_BLOCK_K,
+    dense_activation_cast_dtype,
     get_on_policy_rms_norm_kwargs,
     get_rl_on_policy_target,
     is_tp_invariant_target,
@@ -30,6 +31,7 @@ __all__ = [
     "ROW_LINEAR_INV_BLOCK_K",
     "SGLangTrueOnPolicyContract",
     "SGLangTrueOnPolicyRuntimePolicy",
+    "dense_activation_cast_dtype",
     "get_true_on_policy_contract",
     "get_on_policy_rms_norm_kwargs",
     "get_rl_on_policy_target",

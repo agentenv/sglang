@@ -52,9 +52,9 @@ from sglang.srt.model_loader.weight_utils import (
 from sglang.srt.platforms import current_platform
 from sglang.srt.runtime_context import get_parallel
 from sglang.srt.true_on_policy import (
+    dense_activation_cast_dtype,
     get_on_policy_rms_norm_kwargs,
     is_true_on_policy_enabled,
-    should_force_bfloat16_dense_tensor_math,
 )
 from sglang.srt.utils import add_prefix, make_layers
 from sglang.srt.utils.hf_transformers_utils import get_rope_config
@@ -100,11 +100,11 @@ class Qwen2MLP(nn.Module):
         x: torch.Tensor,
         forward_batch: ForwardBatch = None,
     ) -> torch.Tensor:
-        if (
-            should_force_bfloat16_dense_tensor_math()
-            or x.dtype != self.gate_up_proj.weight.dtype
-        ):
-            x = x.to(self.gate_up_proj.weight.dtype)
+        cast_dtype = dense_activation_cast_dtype(
+            x.dtype, self.gate_up_proj.weight.dtype
+        )
+        if cast_dtype is not None:
+            x = x.to(cast_dtype)
         gate_up, _ = self.gate_up_proj(x)
         x = self.act_fn(gate_up)
         x, _ = self.down_proj(x, forward_batch=forward_batch)
