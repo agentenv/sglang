@@ -142,7 +142,61 @@ class CompressedTensorsW8A8Fp8(CompressedTensorsLinearScheme):
             input_scale[:] = torch.finfo(torch.float32).min
             layer.register_parameter("input_scale", input_scale)
 
+    # Kernel-layout parameters replace the loader-facing ones for these
+    # strategies (the weight is stored transposed as (K, N) for the FP8 GEMM),
+    # so an in-place reload must swap the originals back in first.
+    _RELOADABLE_PARAMS = ("weight", "weight_scale")
+
+    def _supports_inplace_reload(self) -> bool:
+        return (
+            self.strategy in (QuantizationStrategy.TENSOR, QuantizationStrategy.CHANNEL)
+            and not _use_aiter
+            and not is_fp8_fnuz()
+        )
+
+    def restore_weights_before_loading(self, layer) -> None:
+        """Make ``layer`` loadable again after ``process_weights_after_loading``.
+
+        Puts the original (N, K) loader-facing parameters back so a checkpoint
+        reload (``update_weights_from_disk``) writes through their weight
+        loaders. The kernel-layout parameters are kept aside so the next
+        ``process_weights_after_loading`` refills them in place and their
+        device addresses (captured by CUDA graphs) do not change.
+        """
+        loadable = getattr(layer, "_fp8_loadable_params", None)
+        if loadable is None:
+            return
+        layer._fp8_kernel_params = {
+            name: getattr(layer, name) for name in self._RELOADABLE_PARAMS
+        }
+        for name, param in loadable.items():
+            setattr(layer, name, param)
+
+    def _finish_inplace_reload(self, layer) -> None:
+        kernel_params = layer.__dict__.pop("_fp8_kernel_params", None)
+        if kernel_params is None:
+            return
+        for name, old in kernel_params.items():
+            new = getattr(layer, name)
+            if old.shape != new.shape or old.stride() != new.stride():
+                raise RuntimeError(
+                    f"FP8 reload changed the kernel layout of {name}: "
+                    f"{tuple(old.shape)}/{old.stride()} -> "
+                    f"{tuple(new.shape)}/{new.stride()}"
+                )
+            if old.data_ptr() != new.data_ptr():
+                old.data.copy_(new.data)
+            setattr(layer, name, old)
+
     def process_weights_after_loading(self, layer) -> None:
+        if self._supports_inplace_reload():
+            layer._fp8_loadable_params = {
+                name: getattr(layer, name) for name in self._RELOADABLE_PARAMS
+            }
+        self._process_weights_after_loading(layer)
+        self._finish_inplace_reload(layer)
+
+    def _process_weights_after_loading(self, layer) -> None:
         if self.strategy == QuantizationStrategy.TENSOR:
             max_w_scale, weight = requantize_with_max_scale(
                 weight=layer.weight,

@@ -8,7 +8,11 @@ from typing import TYPE_CHECKING, Any, Callable, List, Optional, Tuple, Union
 import torch
 
 from sglang.srt.configs.load_config import LoadConfig
-from sglang.srt.model_loader.loader import DefaultModelLoader, get_model_loader
+from sglang.srt.model_loader.loader import (
+    DefaultModelLoader,
+    get_model_loader,
+    restore_weight,
+)
 from sglang.srt.model_loader.utils import set_default_torch_dtype
 from sglang.srt.model_loader.weight_utils import default_weight_loader
 from sglang.srt.platforms import current_platform
@@ -179,6 +183,9 @@ class WeightUpdater:
             return iter
 
         def model_load_weights(model, iter):
+            # Undo kernel-layout packing (e.g. transposed FP8 weights) so the
+            # checkpoint loads through the original weight loaders.
+            restore_weight(model, target_device)
             loader.load_weights_and_postprocess(model, iter, target_device)
             return model
 
